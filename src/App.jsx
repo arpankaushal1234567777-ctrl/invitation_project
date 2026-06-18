@@ -1,4 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
+import {
+  isSupabaseConfigured,
+  supabase,
+  SUPABASE_MUSIC_BUCKET,
+  SUPABASE_MUSIC_PATH,
+  SUPABASE_MUSIC_ROW_ID,
+} from "./supabase.js";
 
 const STORAGE_KEY = "wedding-invitation-config";
 const ADMIN_PASSWORD = "wedding2026";
@@ -327,6 +334,8 @@ function App() {
   const [adminPassword, setAdminPassword] = useState("");
   const [adminTab, setAdminTab] = useState("Couple Info");
   const [savedToast, setSavedToast] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [musicSyncMessage, setMusicSyncMessage] = useState("");
   const [countdown, setCountdown] = useState(formatCountdown(defaultData.weddingDate));
   const [musicPlaying, setMusicPlaying] = useState(false);
   const [musicPreviewing, setMusicPreviewing] = useState(false);
@@ -337,6 +346,8 @@ function App() {
   const nextSectionRef = useRef(null);
   const sectionRefs = useRef({});
   const clipTimeoutRef = useRef(null);
+  const objectUrlRef = useRef("");
+  const pendingMusicFileRef = useRef(null);
 
   useEffect(() => {
     const link = document.createElement("link");
@@ -383,9 +394,49 @@ function App() {
     }
   }, [data.music.audioUrl]);
 
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) {
+      return undefined;
+    }
+    let cancelled = false;
+
+    async function loadSharedMusicConfig() {
+      const { data: musicRow, error } = await supabase
+        .from("site_music")
+        .select("audio_url, file_name, start_section, clip_start_seconds, clip_length_seconds, source_type")
+        .eq("id", SUPABASE_MUSIC_ROW_ID)
+        .single();
+
+      if (cancelled || error || !musicRow) return;
+
+      setData((current) => ({
+        ...current,
+        music: {
+          ...current.music,
+          audioUrl: musicRow.audio_url || current.music.audioUrl,
+          fileName: musicRow.file_name || "",
+          startSection: musicRow.start_section || current.music.startSection,
+          clipStartSeconds: musicRow.clip_start_seconds ?? current.music.clipStartSeconds,
+          clipLengthSeconds: musicRow.clip_length_seconds ?? current.music.clipLengthSeconds,
+          sourceType: musicRow.source_type || "url",
+        },
+      }));
+      setMusicSyncMessage("Loaded shared music from Supabase.");
+      window.setTimeout(() => setMusicSyncMessage(""), 1800);
+    }
+
+    loadSharedMusicConfig();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => () => {
     if (clipTimeoutRef.current) {
       window.clearTimeout(clipTimeoutRef.current);
+    }
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current);
     }
   }, []);
 
@@ -446,8 +497,25 @@ function App() {
     stopClipTimer();
     const startAt = Number(data.music.clipStartSeconds || 0);
     const clipLength = Number(data.music.clipLengthSeconds || 0);
-    audioRef.current.currentTime = startAt;
     try {
+      if (audioRef.current.readyState < 1) {
+        await new Promise((resolve, reject) => {
+          const handleLoaded = () => {
+            audioRef.current?.removeEventListener("loadedmetadata", handleLoaded);
+            audioRef.current?.removeEventListener("error", handleError);
+            resolve();
+          };
+          const handleError = () => {
+            audioRef.current?.removeEventListener("loadedmetadata", handleLoaded);
+            audioRef.current?.removeEventListener("error", handleError);
+            reject(new Error("audio-load-failed"));
+          };
+          audioRef.current?.addEventListener("loadedmetadata", handleLoaded, { once: true });
+          audioRef.current?.addEventListener("error", handleError, { once: true });
+          audioRef.current?.load();
+        });
+      }
+      audioRef.current.currentTime = startAt;
       await audioRef.current.play();
       setMusicPlaying(true);
       setMusicPreviewing(source === "preview");
@@ -483,28 +551,133 @@ function App() {
   };
 
   const saveData = () => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    setSavedToast(true);
-    window.setTimeout(() => setSavedToast(false), 1800);
+    persistAllData();
   };
 
-  const handleMusicFileUpload = (event) => {
+  const handleMusicFileUpload = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = typeof reader.result === "string" ? reader.result : "";
+    try {
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+      }
+      const objectUrl = URL.createObjectURL(file);
+      objectUrlRef.current = objectUrl;
+      pendingMusicFileRef.current = file;
       setData((current) => ({
         ...current,
         music: {
           ...current.music,
-          audioUrl: result,
+          audioUrl: objectUrl,
           sourceType: "upload",
           fileName: file.name,
         },
       }));
-    };
-    reader.readAsDataURL(file);
+      setSaveError("");
+      setMusicSyncMessage("MP3 selected. Click Save to upload it to Supabase.");
+      window.setTimeout(() => setMusicSyncMessage(""), 2200);
+    } catch {
+      setSaveError("Could not prepare the uploaded MP3.");
+      window.setTimeout(() => setSaveError(""), 2200);
+    }
+  };
+
+  const persistMusicToSupabase = async (currentData) => {
+    if (!isSupabaseConfigured || !supabase) {
+      return { success: false, message: "Supabase env vars are missing." };
+    }
+
+    let finalAudioUrl = currentData.music.audioUrl;
+    let finalFileName = currentData.music.fileName;
+    let finalSourceType = currentData.music.sourceType;
+
+    if (pendingMusicFileRef.current) {
+      const fileOptions = {
+        contentType: pendingMusicFileRef.current.type || "audio/mpeg",
+        cacheControl: "0",
+      };
+
+      const { error: updateError } = await supabase.storage
+        .from(SUPABASE_MUSIC_BUCKET)
+        .update(SUPABASE_MUSIC_PATH, pendingMusicFileRef.current, fileOptions);
+
+      let finalUploadError = updateError;
+
+      if (updateError) {
+        const { error: uploadError } = await supabase.storage
+          .from(SUPABASE_MUSIC_BUCKET)
+          .upload(SUPABASE_MUSIC_PATH, pendingMusicFileRef.current, fileOptions);
+        finalUploadError = uploadError;
+      }
+
+      if (finalUploadError) {
+        console.error("Supabase music upload failed", finalUploadError);
+        return { success: false, message: `Upload failed: ${finalUploadError.message}` };
+      }
+
+      const { data: publicUrlData } = supabase.storage
+        .from(SUPABASE_MUSIC_BUCKET)
+        .getPublicUrl(SUPABASE_MUSIC_PATH);
+
+      finalAudioUrl = `${publicUrlData.publicUrl}?v=${Date.now()}`;
+      finalFileName = pendingMusicFileRef.current.name;
+      finalSourceType = "upload";
+    }
+
+    const { error: upsertError } = await supabase.from("site_music").upsert(
+      {
+        id: SUPABASE_MUSIC_ROW_ID,
+        audio_url: finalAudioUrl,
+        file_name: finalFileName,
+        start_section: currentData.music.startSection,
+        clip_start_seconds: Number(currentData.music.clipStartSeconds || 0),
+        clip_length_seconds: Number(currentData.music.clipLengthSeconds || 0),
+        source_type: finalSourceType,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "id" }
+    );
+
+    if (upsertError) {
+      console.error("Supabase music row save failed", upsertError);
+      return { success: false, message: `Music settings failed: ${upsertError.message}` };
+    }
+
+    pendingMusicFileRef.current = null;
+    setData((current) => ({
+      ...current,
+      music: {
+        ...current.music,
+        audioUrl: finalAudioUrl,
+        fileName: finalFileName,
+        sourceType: finalSourceType,
+      },
+    }));
+
+    return { success: true, message: "Music synced to Supabase." };
+  };
+
+  const persistAllData = async () => {
+    try {
+      const payload = JSON.parse(JSON.stringify(data));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+
+      const musicResult = await persistMusicToSupabase(payload);
+      if (!musicResult.success) {
+        setSaveError(musicResult.message);
+        window.setTimeout(() => setSaveError(""), 2600);
+        return;
+      }
+
+      setSaveError("");
+      setMusicSyncMessage(musicResult.message);
+      setSavedToast(true);
+      window.setTimeout(() => setSavedToast(false), 1800);
+      window.setTimeout(() => setMusicSyncMessage(""), 2200);
+    } catch {
+      setSaveError("Could not save settings in this browser.");
+      window.setTimeout(() => setSaveError(""), 2200);
+    }
   };
 
   const scrollIntoInvitation = () => {
@@ -789,6 +962,8 @@ function App() {
             <button className="pill-button save" onClick={saveData}>
               Save
             </button>
+            {musicSyncMessage ? <div className="admin-status success">{musicSyncMessage}</div> : null}
+            {saveError ? <div className="admin-status error">{saveError}</div> : null}
             <button
               className="ghost-button"
               onClick={() => {
@@ -979,6 +1154,7 @@ function App() {
                   label="Music URL"
                   value={data.music.sourceType === "upload" ? "" : data.music.audioUrl}
                   onChange={(value) => {
+                    pendingMusicFileRef.current = null;
                     setData((current) => ({
                       ...current,
                       music: {
@@ -1017,8 +1193,8 @@ function App() {
                   <input type="file" accept=".mp3,audio/mpeg,audio/*" onChange={handleMusicFileUpload} />
                   <small>
                     {data.music.sourceType === "upload" && data.music.fileName
-                      ? `Using uploaded file: ${data.music.fileName}`
-                      : "Choose a downloaded MP3 to save it in this browser."}
+                      ? `Selected for global upload: ${data.music.fileName}`
+                      : "Choose a downloaded MP3, then click Save to publish it globally via Supabase."}
                   </small>
                 </label>
                 <div className="field full music-preview-card">
@@ -1041,6 +1217,14 @@ function App() {
                       : "Set a start time and length, then test the exact clip here."}
                   </small>
                 </div>
+                <div className="field full music-preview-card">
+                  <span>Music Storage Mode</span>
+                  <small>
+                    {isSupabaseConfigured
+                      ? "Supabase is configured. Saving here updates the one shared song for all visitors."
+                      : "Supabase env vars are missing. Add them before expecting global music sync."}
+                  </small>
+                </div>
                 <Field label="Opening Prompt" value={data.uiText.openingPrompt} onChange={(value) => updateNestedValue(setData, ["uiText", "openingPrompt"], value)} />
                 <Field label="Admin Password" value={ADMIN_PASSWORD} disabled onChange={() => {}} />
               </div>
@@ -1050,6 +1234,8 @@ function App() {
       )}
 
       {savedToast && <div className="toast">Saved ✓</div>}
+      {musicSyncMessage && <div className="toast sync">{musicSyncMessage}</div>}
+      {saveError && <div className="toast error">{saveError}</div>}
     </>
   );
 }
@@ -1523,6 +1709,20 @@ const styles = `
     color: #6b2d2d;
   }
   .admin-sidebar button.active { background: #f7efe6; font-weight: 600; }
+  .admin-status {
+    padding: 10px 12px;
+    border-radius: 14px;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .admin-status.success {
+    background: rgba(15,118,110,0.1);
+    color: #0f766e;
+  }
+  .admin-status.error {
+    background: rgba(185,28,28,0.1);
+    color: #b91c1c;
+  }
   .admin-panel {
     padding: 24px;
     overflow: auto;
@@ -1569,6 +1769,15 @@ const styles = `
     border-radius: 999px;
     z-index: 30;
     box-shadow: 0 16px 26px rgba(34,197,94,0.24);
+  }
+  .toast.error {
+    background: #b91c1c;
+    box-shadow: 0 16px 26px rgba(185,28,28,0.24);
+  }
+  .toast.sync {
+    top: 72px;
+    background: #0f766e;
+    box-shadow: 0 16px 26px rgba(15,118,110,0.24);
   }
   @media (max-width: 900px) {
     .admin-shell { grid-template-columns: 1fr; }

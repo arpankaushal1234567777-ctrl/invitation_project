@@ -4,131 +4,262 @@ Single-page React wedding invitation with:
 
 - cinematic tap-to-reveal opening
 - floating petal background
-- music playback toggle
+- reveal-on-scroll sections
 - scratch-to-reveal save-the-date cards
 - countdown timer
-- gallery, venue, and festivities sections
-- password-protected admin dashboard with `localStorage` persistence
+- admin dashboard for invitation content
+- Supabase-backed global music upload and playback config
+
+## What I Changed In Code
+
+The code now supports:
+
+- one global music record shared by all visitors
+- admin upload of a replacement MP3
+- one fixed storage path so only one song is active at a time
+- section-based music trigger selection
+- clip start and clip duration controls
+- Supabase load on app start
+- Supabase save on admin `Save`
+
+Files added or updated:
+
+- [src/App.jsx](/Users/arpankaushal/Documents/boni_projeect/src/App.jsx:1)
+- [src/supabase.js](/Users/arpankaushal/Documents/boni_projeect/src/supabase.js:1)
+- [.env.example](/Users/arpankaushal/Documents/boni_projeect/.env.example:1)
+- [package.json](/Users/arpankaushal/Documents/boni_projeect/package.json:1)
+
+## Human Tasks Required
+
+These are the setup steps a human must do. I handled the coding, but these platform tasks must be performed in your Supabase and Vercel accounts.
+
+### 1. Create a Supabase project
+
+1. Go to [Supabase](https://supabase.com/).
+2. Create a new project.
+3. Wait for the database to finish provisioning.
+
+### 2. Create the storage bucket
+
+1. Open your Supabase project.
+2. Go to `Storage`.
+3. Create a new bucket named:
+
+```text
+wedding-media
+```
+
+4. Make the bucket `Public`.
+
+This app uploads the shared music file to:
+
+```text
+music/current.mp3
+```
+
+### 3. Create the database table
+
+1. Go to `SQL Editor` in Supabase.
+2. Run this SQL:
+
+```sql
+create table if not exists public.site_music (
+  id text primary key,
+  audio_url text not null,
+  file_name text,
+  start_section text not null default 'opening',
+  clip_start_seconds integer not null default 0,
+  clip_length_seconds integer not null default 30,
+  source_type text not null default 'url',
+  updated_at timestamptz not null default now()
+);
+```
+
+3. Insert the one global row:
+
+```sql
+insert into public.site_music (
+  id,
+  audio_url,
+  file_name,
+  start_section,
+  clip_start_seconds,
+  clip_length_seconds,
+  source_type
+)
+values (
+  'global',
+  'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
+  'default',
+  'opening',
+  0,
+  30,
+  'url'
+)
+on conflict (id) do nothing;
+```
+
+### 4. Add storage policies
+
+You need policies that allow the frontend app to read and replace the single shared MP3.
+
+Run this in Supabase SQL Editor:
+
+```sql
+create policy "Public can read wedding music"
+on storage.objects
+for select
+to public
+using (bucket_id = 'wedding-media');
+
+create policy "Public can upload wedding music"
+on storage.objects
+for insert
+to public
+with check (bucket_id = 'wedding-media');
+
+create policy "Public can update wedding music"
+on storage.objects
+for update
+to public
+using (bucket_id = 'wedding-media')
+with check (bucket_id = 'wedding-media');
+```
+
+### 5. Add table policies
+
+If Row Level Security is enabled, add policies for the `site_music` table too.
+
+Run:
+
+```sql
+alter table public.site_music enable row level security;
+
+create policy "Public can read site music"
+on public.site_music
+for select
+to public
+using (true);
+
+create policy "Public can insert site music"
+on public.site_music
+for insert
+to public
+with check (true);
+
+create policy "Public can update site music"
+on public.site_music
+for update
+to public
+using (true)
+with check (true);
+```
+
+Important:
+
+- this is the fastest setup for a personal/admin-controlled invitation
+- it is not secure against malicious public writes because the app is frontend-only
+- for stronger security, the next step would be moving uploads to a server/API route with admin auth
+
+### 6. Get Supabase project credentials
+
+1. In Supabase, go to `Project Settings` → `API`.
+2. Copy:
+   - `Project URL`
+   - `anon public key`
+
+### 7. Create local environment file
+
+Create a `.env` file in the project root using [.env.example](/Users/arpankaushal/Documents/boni_projeect/.env.example:1):
+
+```env
+VITE_SUPABASE_URL=https://your-project-id.supabase.co
+VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
+```
+
+### 8. Add the same env vars to Vercel
+
+1. Open your Vercel project.
+2. Go to `Settings` → `Environment Variables`.
+3. Add:
+
+```text
+VITE_SUPABASE_URL
+VITE_SUPABASE_ANON_KEY
+```
+
+4. Redeploy the project.
 
 ## Run Locally
 
 1. Open `/Users/arpankaushal/Documents/boni_projeect` in VS Code.
-2. Open a terminal.
-3. Install dependencies:
+2. Install dependencies:
 
 ```bash
 npm install
 ```
 
-4. Start the dev server:
+3. Start the app:
 
 ```bash
 npm run dev
 ```
 
-5. Open the local URL Vite prints, usually `http://localhost:5173`.
+4. Open the Vite URL, usually:
+
+```text
+http://localhost:5173
+```
 
 ## Admin Access
 
-- Open the invitation normally, then click the hidden `Admin` link in the footer.
-- Or go directly to `http://localhost:5173/#/admin`.
-- Password: `wedding2026`
+- open the invitation and click the hidden `Admin` link in the footer
+- or visit `#/admin`
+- password: `wedding2026`
 
-## How To Change The Song
+## How Global Music Works Now
 
-You have two options:
+### If you use a direct music URL
 
-### Option 1: From the admin panel
-
-1. Open the admin dashboard.
+1. Open `Admin`.
 2. Go to `Music & Opening`.
-3. Replace the `Music URL` with a direct audio file URL ending in something like `.mp3`, `.wav`, or `.ogg`.
-4. Click `Save`.
-5. Refresh and tap the opening screen to start playback.
-6. This also works on your Vercel site, but only in that browser because the saved value is stored in `localStorage`.
+3. Paste the public MP3 URL.
+4. Choose:
+   - section to begin playback
+   - clip start in seconds
+   - clip length in seconds
+5. Click `Save`.
 
-### Option 2: Change the default song in code
+That updates the shared Supabase row for everyone.
 
-Edit [src/App.jsx](/Users/arpankaushal/Documents/boni_projeect/src/App.jsx:1) and update `defaultData.music.audioUrl`.
+### If you upload an MP3 file
 
-Use this option when you want the deployed Vercel site to use a new default song for every visitor.
+1. Open `Admin`.
+2. Go to `Music & Opening`.
+3. Choose the MP3 from your device.
+4. Adjust section, clip start, and clip length.
+5. Click `Save`.
 
-Recommended deployment flow:
+That uploads the MP3 to Supabase Storage at the one shared path:
 
-1. Update `defaultData.music.audioUrl` in [src/App.jsx](/Users/arpankaushal/Documents/boni_projeect/src/App.jsx:1).
-2. Make sure the link is a public direct audio file URL.
-3. Push the change to your Git repository.
-4. Let Vercel redeploy the project.
-
-Important:
-
-- admin panel music changes are browser-specific
-- code changes update the deployed default music for everyone
-
-## What The Admin Can Change
-
-The dashboard lets you update:
-
-- bride and groom names
-- monogram
-- parents' names
-- shloka and invitation copy
-- opening prompt text
-- save-the-date text and revealed values
-- wedding date and countdown text
-- gallery photos and captions
-- venue name, address, image, and maps link
-- festivities list
-- each festivity's name, date label, time, image, quote, dress code, venue, and maps link
-- background music URL
-
-All admin changes are saved in browser `localStorage`.
-
-## Deploy To Vercel
-
-### Option 1: Deploy with the Vercel website
-
-1. Push this project to a GitHub repository.
-2. Go to [vercel.com](https://vercel.com).
-3. Sign in and click `Add New...` → `Project`.
-4. Import the GitHub repository.
-5. Vercel should detect it as a Vite app automatically.
-6. Confirm these settings:
-
-- Framework Preset: `Vite`
-- Build Command: `npm run build`
-- Output Directory: `dist`
-
-7. Click `Deploy`.
-
-After deployment, Vercel gives you a live URL.
-
-### Option 2: Deploy with the Vercel CLI
-
-1. Install the Vercel CLI:
-
-```bash
-npm install -g vercel
+```text
+music/current.mp3
 ```
 
-2. In the project folder, run:
+So only one music file is active at a time.
 
-```bash
-vercel
-```
+## Vercel Deployment
 
-3. Follow the prompts.
-4. For production deployment, run:
+1. Push the project to GitHub.
+2. Import the repo into Vercel.
+3. Add the two Supabase env vars in Vercel.
+4. Deploy.
+5. Test the admin music upload on the deployed site.
 
-```bash
-vercel --prod
-```
+## Build Check
 
-## Production Build
-
-To test the production build locally:
+To verify production build locally:
 
 ```bash
 npm run build
-npm run preview
 ```
