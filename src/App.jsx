@@ -1333,15 +1333,21 @@ const styles = `
   }
   .tap-label {
     position: absolute;
-    top: 84px;
+    top: clamp(44px, 10vh, 84px);
     color: #fff6ec;
     font-family: 'Great Vibes', cursive;
-    font-size: 40px;
+    font-size: clamp(28px, 8vw, 40px);
     letter-spacing: 1px;
+    text-align: center;
+    padding: 0 16px;
   }
   .envelope {
-    width: min(88vw, 360px);
-    height: 240px;
+    --envelope-width: min(84vw, 360px);
+    --envelope-half: calc(var(--envelope-width) / 2);
+    --envelope-flap: calc(var(--envelope-width) / 3);
+    --seal-size: clamp(120px, 34vw, 200px);
+    width: var(--envelope-width);
+    height: calc(var(--envelope-width) * 0.67);
     position: relative;
     background: linear-gradient(180deg, #f4e9db, #e9d9c6);
     border-radius: 12px;
@@ -1359,17 +1365,17 @@ const styles = `
   }
   .envelope::before {
     top: 0;
-    border-width: 120px 180px 0 180px;
+    border-width: var(--envelope-flap) var(--envelope-half) 0 var(--envelope-half);
     border-color: #f7efe6 transparent transparent transparent;
   }
   .envelope::after {
     bottom: 0;
-    border-width: 0 180px 120px 180px;
+    border-width: 0 var(--envelope-half) var(--envelope-flap) var(--envelope-half);
     border-color: transparent transparent #dfc7af transparent;
   }
   .envelope-flap {
     top: 0;
-    border-width: 0 180px 120px 180px;
+    border-width: 0 var(--envelope-half) var(--envelope-flap) var(--envelope-half);
     border-color: transparent transparent #ecdcc9 transparent;
     z-index: 2;
   }
@@ -1377,17 +1383,17 @@ const styles = `
     position: absolute;
     inset: 0;
     margin: auto;
-    width: 200px;
-    height: 200px;
+    width: var(--seal-size);
+    height: var(--seal-size);
     border-radius: 50%;
     background: radial-gradient(circle, #fff7ea, #eadcc9 70%);
-    border: 6px double rgba(107,45,45,0.3);
+    border: 4px double rgba(107,45,45,0.3);
     z-index: 3;
     display: grid;
     place-items: center;
     box-shadow: 0 0 30px rgba(255,255,255,0.1), inset 0 0 40px rgba(201,168,76,0.25);
   }
-  .seal span { font-family: 'Great Vibes', cursive; font-size: 56px; color: #6b2d2d; }
+  .seal span { font-family: 'Great Vibes', cursive; font-size: clamp(36px, 10vw, 56px); color: #6b2d2d; }
   .reveal-screen { background: #3f0e0e; }
   .reveal-bloom {
     position: absolute;
