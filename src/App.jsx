@@ -245,8 +245,7 @@ function ScratchCard({ label, value }) {
 
   const handlePointer = (event) => {
     if (!isDrawing || revealed) return;
-    const touch = event.touches?.[0];
-    scratchAt(touch ? touch.clientX : event.clientX, touch ? touch.clientY : event.clientY);
+    scratchAt(event.clientX, event.clientY);
   };
 
   return (
@@ -262,16 +261,18 @@ function ScratchCard({ label, value }) {
         onMouseMove={handlePointer}
         onMouseUp={() => setIsDrawing(false)}
         onMouseLeave={() => setIsDrawing(false)}
-        onTouchStart={(event) => {
+        onPointerDown={(event) => {
+          event.preventDefault();
+          event.currentTarget.setPointerCapture?.(event.pointerId);
           setIsDrawing(true);
-          const touch = event.touches?.[0];
-          if (touch) scratchAt(touch.clientX, touch.clientY);
+          scratchAt(event.clientX, event.clientY);
         }}
-        onTouchMove={(event) => {
+        onPointerMove={(event) => {
           event.preventDefault();
           handlePointer(event);
         }}
-        onTouchEnd={() => setIsDrawing(false)}
+        onPointerUp={() => setIsDrawing(false)}
+        onPointerCancel={() => setIsDrawing(false)}
       >
         <div className="scratch-value">{value}</div>
         <canvas ref={canvasRef} className="scratch-overlay" />
@@ -421,8 +422,6 @@ function App() {
           sourceType: musicRow.source_type || "url",
         },
       }));
-      setMusicSyncMessage("Loaded shared music from Supabase.");
-      window.setTimeout(() => setMusicSyncMessage(""), 1800);
     }
 
     loadSharedMusicConfig();
@@ -1510,6 +1509,9 @@ const styles = `
     overflow: hidden;
     background: #fff;
     box-shadow: 0 18px 28px rgba(107,45,45,0.08);
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
   }
   .scratch-value, .date-stamp {
     position: absolute;
@@ -1526,6 +1528,7 @@ const styles = `
     inset: 0;
     width: 100%;
     height: 100%;
+    touch-action: none;
   }
   .confetti-layer { position: absolute; inset: 0; pointer-events: none; }
   .confetti-dot {
