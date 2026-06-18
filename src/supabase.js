@@ -9,6 +9,7 @@ export const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey)
   : null;
 
-export const SUPABASE_MUSIC_BUCKET = "wedding-media";
+export const SUPABASE_MUSIC_BUCKET =
+  import.meta.env.VITE_SUPABASE_MUSIC_BUCKET || "wedding-media";
 export const SUPABASE_MUSIC_PATH = "music/current.mp3";
 export const SUPABASE_MUSIC_ROW_ID = "global";

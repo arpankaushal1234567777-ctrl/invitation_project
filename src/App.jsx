@@ -1224,6 +1224,7 @@ function App() {
                       ? "Supabase is configured. Saving here updates the one shared song for all visitors."
                       : "Supabase env vars are missing. Add them before expecting global music sync."}
                   </small>
+                  <small>Storage bucket in use: {SUPABASE_MUSIC_BUCKET}</small>
                 </div>
                 <Field label="Opening Prompt" value={data.uiText.openingPrompt} onChange={(value) => updateNestedValue(setData, ["uiText", "openingPrompt"], value)} />
                 <Field label="Admin Password" value={ADMIN_PASSWORD} disabled onChange={() => {}} />

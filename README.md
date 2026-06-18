@@ -175,7 +175,10 @@ Create a `.env` file in the project root using [.env.example](/Users/arpankausha
 ```env
 VITE_SUPABASE_URL=https://your-project-id.supabase.co
 VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
+VITE_SUPABASE_MUSIC_BUCKET=wedding-media
 ```
+
+If your Supabase bucket has a different name, set `VITE_SUPABASE_MUSIC_BUCKET` to that exact bucket name.
 
 ### 8. Add the same env vars to Vercel
 
@@ -186,6 +189,7 @@ VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
 ```text
 VITE_SUPABASE_URL
 VITE_SUPABASE_ANON_KEY
+VITE_SUPABASE_MUSIC_BUCKET
 ```
 
 4. Redeploy the project.
