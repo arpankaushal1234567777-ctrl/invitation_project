@@ -5,11 +5,6 @@ import {
   SUPABASE_MUSIC_BUCKET,
   SUPABASE_MUSIC_PATH,
   SUPABASE_MUSIC_ROW_ID,
-  SUPABASE_GALLERY_BUCKET,
-  VALID_IMAGE_TYPES,
-  VALID_IMAGE_EXTENSIONS,
-  MAX_IMAGE_SIZE,
-  MAX_IMAGES_PER_GALLERY,
 } from "./supabase.js";
 
 const STORAGE_KEY = "wedding-invitation-config";
@@ -49,7 +44,6 @@ const defaultData = {
       { url: "https://picsum.photos/400/500?random=2", caption: "Laughter" },
       { url: "https://picsum.photos/400/500?random=3", caption: "Forever" },
     ],
-    gallery: [],
   },
   venue: {
     name: "Rajalakshmi Kalyana Mandapam",
@@ -57,7 +51,6 @@ const defaultData = {
       "No. 205/1, Velachery Main Road, Dhandeeswaram, Velachery, Chennai, Tamil Nadu — 600042",
     imageUrl: "https://picsum.photos/400/300?random=10",
     mapsUrl: "https://maps.google.com",
-    gallery: [],
   },
   festivities: [
     {
@@ -74,7 +67,6 @@ const defaultData = {
       venue: "Accord Wildlife Pench Resort · Grand Courtyard",
       imageUrl: "https://picsum.photos/400/280?random=21",
       mapsUrl: "https://maps.google.com",
-      gallery: [],
     },
     {
       id: 2,
@@ -90,7 +82,6 @@ const defaultData = {
       venue: "Rajalakshmi Kalyana Mandapam",
       imageUrl: "https://picsum.photos/400/280?random=22",
       mapsUrl: "https://maps.google.com",
-      gallery: [],
     },
     {
       id: 3,
@@ -106,7 +97,6 @@ const defaultData = {
       venue: "Moonlight Pavilion · Lakeview Lawns",
       imageUrl: "https://picsum.photos/400/280?random=23",
       mapsUrl: "https://maps.google.com",
-      gallery: [],
     },
   ],
   music: {
@@ -145,11 +135,62 @@ function mergeWithDefaults(defaultValue, savedValue) {
 }
 
 function loadInitialData() {
+  // Default values used until Supabase responds; localStorage kept as offline fallback only
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     return saved ? mergeWithDefaults(defaultData, JSON.parse(saved)) : defaultData;
   } catch {
     return defaultData;
+  }
+}
+
+// ── Supabase helpers ────────────────────────────────────────────────────────
+
+const SITE_CONFIG_ID = "main";
+const MEDIA_BUCKET = "wedding-media";
+
+/** Extract a Supabase storage path from a public URL, e.g. "gallery/abc.jpg" */
+function storagePathFromUrl(url) {
+  if (!url || !url.includes("/storage/v1/object/public/")) return null;
+  try {
+    const afterBucket = url.split(`/object/public/${MEDIA_BUCKET}/`)[1];
+    return afterBucket ? afterBucket.split("?")[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Upload a File to Supabase Storage, returning the public URL.
+ *  Optionally deletes `oldUrl` first if it's a Supabase-hosted file. */
+async function uploadToStorage(file, storagePath, oldUrl = null) {
+  if (!supabase) throw new Error("Supabase not configured");
+
+  if (oldUrl) {
+    const oldPath = storagePathFromUrl(oldUrl);
+    if (oldPath) {
+      await supabase.storage.from(MEDIA_BUCKET).remove([oldPath]);
+    }
+  }
+
+  const { error } = await supabase.storage
+    .from(MEDIA_BUCKET)
+    .upload(storagePath, file, { upsert: true, contentType: file.type });
+
+  if (error) throw new Error(error.message);
+
+  const { data: urlData } = supabase.storage
+    .from(MEDIA_BUCKET)
+    .getPublicUrl(storagePath);
+
+  return `${urlData.publicUrl}?v=${Date.now()}`;
+}
+
+/** Delete a file from Supabase Storage by its public URL */
+async function deleteFromStorage(url) {
+  if (!supabase || !url) return;
+  const path = storagePathFromUrl(url);
+  if (path) {
+    await supabase.storage.from(MEDIA_BUCKET).remove([path]);
   }
 }
 
@@ -193,211 +234,6 @@ function updateNestedValue(setter, path, value) {
     cursor[path[path.length - 1]] = value;
     return next;
   });
-}
-
-// Image upload utilities
-function isValidImage(file) {
-  return VALID_IMAGE_TYPES.includes(file.type);
-}
-
-function getImageExtension(file) {
-  const name = file.name.toLowerCase();
-  return VALID_IMAGE_EXTENSIONS.find(ext => name.endsWith(ext)) || ".jpg";
-}
-
-async function uploadImageToSupabase(file, galleryType, eventId = null) {
-  if (!isSupabaseConfigured || !supabase) {
-    throw new Error("Supabase not configured");
-  }
-
-  if (!isValidImage(file) || file.size > MAX_IMAGE_SIZE) {
-    throw new Error("Invalid image format or size too large");
-  }
-
-  const timestamp = Date.now();
-  const eventFolder = eventId ? `events/${eventId}` : galleryType;
-  const storagePath = `${eventFolder}/${timestamp}-${Math.random().toString(36).slice(2, 9)}${getImageExtension(file)}`;
-
-  try {
-    const { error: uploadError } = await supabase.storage
-      .from(SUPABASE_GALLERY_BUCKET)
-      .upload(storagePath, file, {
-        contentType: file.type,
-        cacheControl: "0",
-      });
-
-    if (uploadError) throw uploadError;
-
-    const { data: publicUrlData } = supabase.storage
-      .from(SUPABASE_GALLERY_BUCKET)
-      .getPublicUrl(storagePath);
-
-    return {
-      imageUrl: `${publicUrlData.publicUrl}?v=${timestamp}`,
-      storagePath,
-    };
-  } catch (error) {
-    throw new Error(`Upload failed: ${error.message}`);
-  }
-}
-
-async function persistGalleryImageRow({ galleryType, eventId, imageUrl, storagePath }) {
-  const { data, error } = await supabase
-    .from("gallery_images")
-    .insert([
-      {
-        gallery_type: galleryType,
-        event_id: eventId,
-        image_url: imageUrl,
-        storage_path: storagePath,
-      },
-    ])
-    .select();
-
-  console.log("DATA:", data);
-  console.log("ERROR:", error);
-
-  if (error) throw error;
-}
-
-async function deleteGalleryImageRow(storagePath) {
-  if (!isSupabaseConfigured || !supabase) {
-    throw new Error("Supabase not configured");
-  }
-
-  const { error } = await supabase
-    .from("gallery_images")
-    .delete()
-    .eq("storage_path", storagePath);
-
-  if (error) {
-    throw error;
-  }
-}
-
-async function deleteImageFromSupabase(storagePath) {
-  if (!isSupabaseConfigured || !supabase) {
-    throw new Error("Supabase not configured");
-  }
-
-  try {
-    const { error } = await supabase.storage
-      .from(SUPABASE_GALLERY_BUCKET)
-      .remove([storagePath]);
-
-    if (error) throw error;
-
-    await deleteGalleryImageRow(storagePath);
-  } catch (error) {
-    throw new Error(`Delete failed: ${error.message}`);
-  }
-}
-
-function ImageUploader({ galleryType, eventId, onUpload, onError, maxImages = MAX_IMAGES_PER_GALLERY, currentCount = 0, multiple = true, buttonLabel = "Choose Images" }) {
-  const [dragging, setDragging] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [preview, setPreview] = useState(null);
-  const fileInputRef = useRef(null);
-
-  const handleFiles = async (files) => {
-    const selectedFiles = Array.from(files);
-    const uploadFiles = multiple ? selectedFiles : selectedFiles.slice(0, 1);
-
-    const validFiles = uploadFiles.filter((f) => {
-      if (!isValidImage(f)) {
-        onError(`${f.name} is not a valid image format`);
-        return false;
-      }
-      if (f.size > MAX_IMAGE_SIZE) {
-        onError(`${f.name} is too large (max 20MB)`);
-        return false;
-      }
-      return true;
-    });
-
-    if (currentCount + validFiles.length > maxImages) {
-      onError(`Maximum ${maxImages} images allowed`);
-      return;
-    }
-
-    setUploading(true);
-    try {
-      for (let fileIndex = 0; fileIndex < validFiles.length; fileIndex += 1) {
-        const file = validFiles[fileIndex];
-        const result = await uploadImageToSupabase(file, galleryType, eventId);
-        await persistGalleryImageRow({
-          galleryType,
-          eventId,
-          imageUrl: result.imageUrl,
-          storagePath: result.storagePath,
-        });
-        onUpload(
-          {
-            imageUrl: result.imageUrl,
-            storagePath: result.storagePath,
-            caption: file.name.replace(/\.[^/.]+$/, ""),
-          },
-          fileIndex
-        );
-      }
-      setPreview(null);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
-    } catch (error) {
-      onError(error.message);
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    setDragging(true);
-  };
-
-  const handleDragLeave = () => {
-    setDragging(false);
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setDragging(false);
-    handleFiles(e.dataTransfer.files);
-  };
-
-  const handleFileSelect = (e) => {
-    handleFiles(e.target.files);
-  };
-
-  return (
-    <div className={`image-uploader ${dragging ? 'dragging' : ''}`} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple={multiple}
-        accept={VALID_IMAGE_EXTENSIONS.join(",")}
-        onChange={handleFileSelect}
-        disabled={uploading || currentCount >= maxImages}
-        className="file-input"
-      />
-      <button
-        type="button"
-        className="pill-button dark"
-        onClick={() => fileInputRef.current?.click()}
-        disabled={uploading || currentCount >= maxImages}
-      >
-        {uploading ? "Uploading..." : buttonLabel}
-      </button>
-      {multiple ? <small>{currentCount}/{maxImages} images</small> : null}
-      {preview && (
-        <div className="image-preview-modal">
-          <img src={preview} alt="Preview" />
-          <button className="ghost-button" onClick={() => setPreview(null)}>Close</button>
-        </div>
-      )}
-    </div>
-  );
 }
 
 function ScratchCard({ label, value }) {
@@ -557,6 +393,7 @@ function App() {
   const [musicPreviewing, setMusicPreviewing] = useState(false);
   const [previewMode, setPreviewMode] = useState(false);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [dbLoading, setDbLoading] = useState(isSupabaseConfigured);
   const [petals] = useState(() => createPetals(26));
   const audioRef = useRef(null);
   const nextSectionRef = useRef(null);
@@ -616,62 +453,62 @@ function App() {
     }
     let cancelled = false;
 
-    async function loadSharedMusicConfig() {
-      const { data: musicRow, error } = await supabase
-        .from("site_music")
-        .select("audio_url, file_name, start_section, clip_start_seconds, clip_length_seconds, source_type")
-        .eq("id", SUPABASE_MUSIC_ROW_ID)
-        .single();
+    async function loadAllFromSupabase() {
+      try {
+        // Load site config
+        const { data: configRow } = await supabase
+          .from("site_config")
+          .select("*")
+          .eq("id", SITE_CONFIG_ID)
+          .maybeSingle();
 
-      if (cancelled || error || !musicRow) return;
+        // Load music
+        const { data: musicRow } = await supabase
+          .from("site_music")
+          .select("audio_url, file_name, start_section, clip_start_seconds, clip_length_seconds, source_type")
+          .eq("id", SUPABASE_MUSIC_ROW_ID)
+          .maybeSingle();
 
-      setData((current) => ({
-        ...current,
-        music: {
-          ...current.music,
-          audioUrl: musicRow.audio_url || current.music.audioUrl,
-          fileName: musicRow.file_name || "",
-          startSection: musicRow.start_section || current.music.startSection,
-          clipStartSeconds: musicRow.clip_start_seconds ?? current.music.clipStartSeconds,
-          clipLengthSeconds: musicRow.clip_length_seconds ?? current.music.clipLengthSeconds,
-          sourceType: musicRow.source_type || "url",
-        },
-      }));
-    }
+        if (cancelled) return;
 
-    async function loadGalleryImages() {
-      const { data: rows, error } = await supabase
-        .from("gallery_images")
-        .select("gallery_type,event_id,image_url,storage_path");
+        setData((current) => {
+          let next = { ...current };
 
-      if (cancelled || error || !rows) return;
-
-      setData((current) => {
-        const next = JSON.parse(JSON.stringify(current));
-        next.story.gallery = [];
-        next.venue.gallery = [];
-        next.festivities = next.festivities.map((event) => ({ ...event, gallery: [] }));
-
-        rows.forEach((row) => {
-          const image = { imageUrl: row.image_url, storagePath: row.storage_path };
-          if (row.gallery_type === "story") {
-            next.story.gallery.push(image);
-          } else if (row.gallery_type === "venue") {
-            next.venue.gallery.push(image);
-          } else if (row.gallery_type === "festivity") {
-            const eventIndex = next.festivities.findIndex((event) => String(event.id) === String(row.event_id));
-            if (eventIndex !== -1) {
-              next.festivities[eventIndex].gallery.push(image);
-            }
+          if (configRow) {
+            next = mergeWithDefaults(defaultData, {
+              uiText: configRow.ui_text || current.uiText,
+              couple: configRow.couple || current.couple,
+              weddingDate: configRow.wedding_date || current.weddingDate,
+              saveTheDate: configRow.save_the_date || current.saveTheDate,
+              story: configRow.story || current.story,
+              venue: configRow.venue || current.venue,
+              festivities: configRow.festivities || current.festivities,
+              music: current.music,
+            });
           }
-        });
 
-        return next;
-      });
+          if (musicRow) {
+            next.music = {
+              ...next.music,
+              audioUrl: musicRow.audio_url || next.music.audioUrl,
+              fileName: musicRow.file_name || "",
+              startSection: musicRow.start_section || next.music.startSection,
+              clipStartSeconds: musicRow.clip_start_seconds ?? next.music.clipStartSeconds,
+              clipLengthSeconds: musicRow.clip_length_seconds ?? next.music.clipLengthSeconds,
+              sourceType: musicRow.source_type || "url",
+            };
+          }
+
+          return next;
+        });
+      } catch (err) {
+        console.error("Failed to load from Supabase", err);
+      } finally {
+        if (!cancelled) setDbLoading(false);
+      }
     }
 
-    loadSharedMusicConfig();
-    loadGalleryImages();
+    loadAllFromSupabase();
     return () => {
       cancelled = true;
     };
@@ -906,25 +743,119 @@ function App() {
   const persistAllData = async () => {
     try {
       const payload = JSON.parse(JSON.stringify(data));
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
 
-      const musicResult = await persistMusicToSupabase(payload);
-      if (!musicResult.success) {
-        setSaveError(musicResult.message);
-        window.setTimeout(() => setSaveError(""), 2600);
-        return;
+      if (isSupabaseConfigured && supabase) {
+        // Save all text/config data to site_config
+        const { error: configError } = await supabase.from("site_config").upsert(
+          {
+            id: SITE_CONFIG_ID,
+            ui_text: payload.uiText,
+            couple: payload.couple,
+            wedding_date: payload.weddingDate,
+            save_the_date: payload.saveTheDate,
+            story: payload.story,
+            venue: payload.venue,
+            festivities: payload.festivities,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "id" }
+        );
+
+        if (configError) {
+          setSaveError(`Save failed: ${configError.message}`);
+          window.setTimeout(() => setSaveError(""), 3000);
+          return;
+        }
+
+        // Save music
+        const musicResult = await persistMusicToSupabase(payload);
+        if (!musicResult.success) {
+          setSaveError(musicResult.message);
+          window.setTimeout(() => setSaveError(""), 2600);
+          return;
+        }
+
+        setMusicSyncMessage(musicResult.message);
+      } else {
+        // Offline fallback: localStorage only
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
       }
 
       setSaveError("");
-      setMusicSyncMessage(musicResult.message);
       setSavedToast(true);
       window.setTimeout(() => setSavedToast(false), 1800);
       window.setTimeout(() => setMusicSyncMessage(""), 2200);
-    } catch {
-      setSaveError("Could not save settings in this browser.");
+    } catch (err) {
+      setSaveError(`Could not save: ${err.message || err}`);
       window.setTimeout(() => setSaveError(""), 2200);
     }
   };
+
+  // ── Image upload helpers ────────────────────────────────────────────────
+
+  const handleGalleryImageUpload = async (index, event) => {
+    const file = event.target.files?.[0];
+    if (!file || !supabase) return;
+    try {
+      const oldUrl = data.story.photos[index]?.url;
+      const path = `gallery/${Date.now()}-${file.name}`;
+      const newUrl = await uploadToStorage(file, path, oldUrl);
+      updateNestedValue(setData, ["story", "photos", index, "url"], newUrl);
+    } catch (err) {
+      setSaveError(`Gallery upload failed: ${err.message}`);
+      window.setTimeout(() => setSaveError(""), 3000);
+    }
+  };
+
+  const handleRemoveGalleryPhoto = async (index) => {
+    const photo = data.story.photos[index];
+    if (photo?.url) {
+      await deleteFromStorage(photo.url).catch(console.error);
+    }
+    setData((current) => ({
+      ...current,
+      story: {
+        ...current.story,
+        photos: current.story.photos.filter((_, i) => i !== index),
+      },
+    }));
+  };
+
+  const handleVenueImageUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file || !supabase) return;
+    try {
+      const oldUrl = data.venue.imageUrl;
+      const path = `venue/${Date.now()}-${file.name}`;
+      const newUrl = await uploadToStorage(file, path, oldUrl);
+      updateNestedValue(setData, ["venue", "imageUrl"], newUrl);
+    } catch (err) {
+      setSaveError(`Venue image upload failed: ${err.message}`);
+      window.setTimeout(() => setSaveError(""), 3000);
+    }
+  };
+
+  const handleEventImageUpload = async (index, event) => {
+    const file = event.target.files?.[0];
+    if (!file || !supabase) return;
+    try {
+      const oldUrl = data.festivities[index]?.imageUrl;
+      const path = `events/${Date.now()}-${file.name}`;
+      const newUrl = await uploadToStorage(file, path, oldUrl);
+      updateNestedValue(setData, ["festivities", index, "imageUrl"], newUrl);
+    } catch (err) {
+      setSaveError(`Event image upload failed: ${err.message}`);
+      window.setTimeout(() => setSaveError(""), 3000);
+    }
+  };
+
+  const handleRemoveEventImage = async (index) => {
+    const oldUrl = data.festivities[index]?.imageUrl;
+    if (oldUrl) await deleteFromStorage(oldUrl).catch(console.error);
+    updateNestedValue(setData, ["festivities", index, "imageUrl"], "");
+  };
+
+  // ── End image helpers ───────────────────────────────────────────────────
 
   const scrollIntoInvitation = () => {
     if (!nextSectionRef.current) return;
@@ -941,6 +872,23 @@ function App() {
     "Festivities",
     "Music & Opening",
   ];
+
+  if (dbLoading) {
+    return (
+      <>
+        <style>{styles}</style>
+        <div style={{
+          position: "fixed", inset: 0, display: "flex", alignItems: "center",
+          justifyContent: "center", flexDirection: "column", gap: 16,
+          background: "#fdf6f0", color: "#6b2d2d", fontFamily: "'Jost', sans-serif",
+          zIndex: 100,
+        }}>
+          <div style={{ fontSize: 40 }}>ॐ</div>
+          <p style={{ margin: 0, fontSize: 14, letterSpacing: 2, opacity: 0.7 }}>LOADING…</p>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -1076,22 +1024,6 @@ function App() {
                         <figcaption>{photo.caption}</figcaption>
                       </RevealOnScroll>
                     ))}
-                    {data.story.gallery.map((image, index) => (
-                      <RevealOnScroll
-                        key={`gallery-${image.storagePath}`}
-                        as="figure"
-                        className="polaroid-card"
-                        delay={(data.story.photos.length + index) * 120}
-                      >
-                        <div
-                          className="tilt-frame"
-                          style={{ "--polaroid-tilt": `${(data.story.photos.length + index) % 2 === 0 ? -2 : 2}deg` }}
-                        >
-                          <img src={image.imageUrl} alt="Gallery" />
-                        </div>
-                        <figcaption>Our Story</figcaption>
-                      </RevealOnScroll>
-                    ))}
                   </div>
                 </RevealOnScroll>
 
@@ -1101,15 +1033,6 @@ function App() {
                   <h2 className="section-title">{data.uiText.venueTitle}</h2>
                   <div className="venue-card">
                     <img src={data.venue.imageUrl} alt={data.venue.name} className="venue-image" />
-                    {data.venue.gallery.length > 0 && (
-                      <div className="gallery-preview" style={{ marginBottom: "16px" }}>
-                        {data.venue.gallery.map((image) => (
-                          <div key={image.storagePath} className="gallery-item">
-                            <img src={image.imageUrl} alt="Venue" />
-                          </div>
-                        ))}
-                      </div>
-                    )}
                     <div className="venue-separator">✦</div>
                     <h3>{data.venue.name}</h3>
                     <p>{data.venue.address}</p>
@@ -1134,15 +1057,6 @@ function App() {
                         {event.imageUrl ? (
                           <img src={event.imageUrl} alt={event.name} className="event-image" />
                         ) : null}
-                        {event.gallery && event.gallery.length > 0 && (
-                          <div className="gallery-preview" style={{ marginBottom: "14px" }}>
-                            {event.gallery.map((image) => (
-                              <div key={image.storagePath} className="gallery-item">
-                                <img src={image.imageUrl} alt="Event" />
-                              </div>
-                            ))}
-                          </div>
-                        )}
                         <h3>{event.name}</h3>
                         <p className="event-meta">
                           {event.date} <span>·</span> {event.time}
@@ -1299,57 +1213,41 @@ function App() {
                   <Field label="Section Kicker" value={data.uiText.storyKicker} onChange={(value) => updateNestedValue(setData, ["uiText", "storyKicker"], value)} />
                   <Field label="Section Title" value={data.uiText.storyTitle} onChange={(value) => updateNestedValue(setData, ["uiText", "storyTitle"], value)} />
                 </div>
-                <div className="repeater-card">
-                  <h4>URL-Based Photos</h4>
-                  {data.story.photos.map((photo, index) => (
-                    <div key={index} className="repeater-card nested">
-                      <Field label="Photo URL" value={photo.url} onChange={(value) => updateNestedValue(setData, ["story", "photos", index, "url"], value)} />
-                      <ImageUploader
-                        multiple={false}
-                        buttonLabel="Upload Photo"
-                        galleryType="story"
-                        onUpload={(image) =>
-                          updateNestedValue(setData, ["story", "photos", index, "url"], image.imageUrl)
-                        }
-                        onError={(msg) => {
-                          setSaveError(msg);
-                          window.setTimeout(() => setSaveError(""), 2200);
-                        }}
-                      />
-                      <Field label="Caption" value={photo.caption} onChange={(value) => updateNestedValue(setData, ["story", "photos", index, "caption"], value)} />
-                      <button
-                        className="ghost-button"
-                        onClick={() =>
-                          setData((current) => ({
-                            ...current,
-                            story: {
-                              ...current.story,
-                              photos: current.story.photos.filter((_, itemIndex) => itemIndex !== index),
-                            },
-                          }))
-                        }
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                  {data.story.photos.length < 5 && (
+                {data.story.photos.map((photo, index) => (
+                  <div key={index} className="repeater-card">
+                    {photo.url && <img src={photo.url} alt={photo.caption} style={{ width: "100%", height: 120, objectFit: "cover", borderRadius: 10, marginBottom: 8 }} />}
+                    <Field label="Photo URL" value={photo.url} onChange={(value) => updateNestedValue(setData, ["story", "photos", index, "url"], value)} />
+                    <Field label="Caption" value={photo.caption} onChange={(value) => updateNestedValue(setData, ["story", "photos", index, "caption"], value)} />
+                    {isSupabaseConfigured && (
+                      <label className="field upload-field">
+                        <span>Upload Photo</span>
+                        <input type="file" accept="image/*" onChange={(e) => handleGalleryImageUpload(index, e)} />
+                      </label>
+                    )}
                     <button
-                      className="pill-button dark"
-                      onClick={() =>
-                        setData((current) => ({
-                          ...current,
-                          story: {
-                            ...current.story,
-                            photos: [...current.story.photos, { url: "https://picsum.photos/400/500", caption: "New memory" }],
-                          },
-                        }))
-                      }
+                      className="ghost-button"
+                      onClick={() => handleRemoveGalleryPhoto(index)}
                     >
-                      Add URL Photo
+                      Remove Photo
                     </button>
-                  )}
-                </div>
+                  </div>
+                ))}
+                {data.story.photos.length < 5 && (
+                  <button
+                    className="pill-button dark"
+                    onClick={() =>
+                      setData((current) => ({
+                        ...current,
+                        story: {
+                          ...current.story,
+                          photos: [...current.story.photos, { url: "https://picsum.photos/400/500", caption: "New memory" }],
+                        },
+                      }))
+                    }
+                  >
+                    Add Photo
+                  </button>
+                )}
               </div>
             )}
 
@@ -1359,16 +1257,13 @@ function App() {
                 <Field label="Section Title" value={data.uiText.venueTitle} onChange={(value) => updateNestedValue(setData, ["uiText", "venueTitle"], value)} />
                 <Field label="Venue Name" value={data.venue.name} onChange={(value) => updateNestedValue(setData, ["venue", "name"], value)} />
                 <Field label="Venue Image URL" value={data.venue.imageUrl} onChange={(value) => updateNestedValue(setData, ["venue", "imageUrl"], value)} />
-                <ImageUploader
-                  multiple={false}
-                  buttonLabel="Upload Venue Image"
-                  galleryType="venue"
-                  onUpload={(image) => updateNestedValue(setData, ["venue", "imageUrl"], image.imageUrl)}
-                  onError={(msg) => {
-                    setSaveError(msg);
-                    window.setTimeout(() => setSaveError(""), 2200);
-                  }}
-                />
+                {isSupabaseConfigured && (
+                  <label className="field upload-field">
+                    <span>Upload Venue Image</span>
+                    <input type="file" accept="image/*" onChange={handleVenueImageUpload} />
+                    {data.venue.imageUrl && <img src={data.venue.imageUrl} alt="venue" style={{ width: "100%", height: 100, objectFit: "cover", borderRadius: 10, marginTop: 6 }} />}
+                  </label>
+                )}
                 <Field label="Maps URL" value={data.venue.mapsUrl} onChange={(value) => updateNestedValue(setData, ["venue", "mapsUrl"], value)} />
                 <TextArea label="Address" value={data.venue.address} onChange={(value) => updateNestedValue(setData, ["venue", "address"], value)} />
               </div>
@@ -1382,23 +1277,24 @@ function App() {
                 </div>
                 {data.festivities.map((event, index) => (
                   <div key={event.id} className="repeater-card">
-                    <h3>{event.name}</h3>
                     <Field label="Event Name" value={event.name} onChange={(value) => updateNestedValue(setData, ["festivities", index, "name"], value)} />
                     <Field label="Date Label" value={event.date} onChange={(value) => updateNestedValue(setData, ["festivities", index, "date"], value)} />
                     <Field label="Time" value={event.time} onChange={(value) => updateNestedValue(setData, ["festivities", index, "time"], value)} />
                     <Field label="Event Image URL" value={event.imageUrl || ""} onChange={(value) => updateNestedValue(setData, ["festivities", index, "imageUrl"], value)} />
-                    <ImageUploader
-                      multiple={false}
-                      buttonLabel="Upload Event Image"
-                      galleryType="festivity"
-                      eventId={event.id}
-                      onUpload={(image) => updateNestedValue(setData, ["festivities", index, "imageUrl"], image.imageUrl)}
-                      onError={(msg) => {
-                        setSaveError(msg);
-                        window.setTimeout(() => setSaveError(""), 2200);
-                      }}
-                    />
+                    {isSupabaseConfigured && (
+                      <div className="inline-actions">
+                        <label className="field upload-field" style={{ flex: 1 }}>
+                          <span>Upload Event Image</span>
+                          <input type="file" accept="image/*" onChange={(e) => handleEventImageUpload(index, e)} />
+                        </label>
+                        {event.imageUrl && (
+                          <button className="ghost-button" onClick={() => handleRemoveEventImage(index)}>Remove Image</button>
+                        )}
+                      </div>
+                    )}
+                    {event.imageUrl && <img src={event.imageUrl} alt={event.name} style={{ width: "100%", height: 100, objectFit: "cover", borderRadius: 10 }} />}
                     <TextArea label="Quote" value={event.quote} onChange={(value) => updateNestedValue(setData, ["festivities", index, "quote"], value)} />
+                    <Field label="Dress Code Names" value={event.dressCode.names} onChange={(value) => updateNestedValue(setData, ["festivities", index, "dressCode", "names"], value)} />
                     <Field label="Dress Code Style" value={event.dressCode.style} onChange={(value) => updateNestedValue(setData, ["festivities", index, "dressCode", "style"], value)} />
                     <Field label="Venue" value={event.venue} onChange={(value) => updateNestedValue(setData, ["festivities", index, "venue"], value)} />
                     <Field label="Maps URL" value={event.mapsUrl} onChange={(value) => updateNestedValue(setData, ["festivities", index, "mapsUrl"], value)} />
@@ -1422,12 +1318,14 @@ function App() {
                     </div>
                     <button
                       className="ghost-button"
-                      onClick={() =>
+                      onClick={async () => {
+                        const evt = data.festivities[index];
+                        if (evt?.imageUrl) await deleteFromStorage(evt.imageUrl).catch(console.error);
                         setData((current) => ({
                           ...current,
                           festivities: current.festivities.filter((_, itemIndex) => itemIndex !== index),
-                        }))
-                      }
+                        }));
+                      }}
                     >
                       Remove Event
                     </button>
@@ -1454,7 +1352,6 @@ function App() {
                           venue: "Event Venue",
                           imageUrl: "https://picsum.photos/400/280?random=31",
                           mapsUrl: "https://maps.google.com",
-                          gallery: [],
                         },
                       ],
                     }))
@@ -2106,78 +2003,6 @@ const styles = `
     top: 72px;
     background: #0f766e;
     box-shadow: 0 16px 26px rgba(15,118,110,0.24);
-  }
-  .image-uploader {
-    border: 2px dashed #ead7c5;
-    border-radius: 18px;
-    padding: 16px;
-    text-align: center;
-    background: #fffaf5;
-    transition: all 0.2s ease;
-  }
-  .image-uploader.dragging {
-    border-color: #c9a84c;
-    background: #fffbf8;
-  }
-  .image-uploader .file-input {
-    display: none;
-  }
-  .image-uploader small {
-    display: block;
-    margin-top: 8px;
-    color: #8b6565;
-    font-size: 12px;
-  }
-  .gallery-preview {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 12px;
-    margin-top: 16px;
-  }
-  .gallery-item {
-    position: relative;
-    border-radius: 14px;
-    overflow: hidden;
-    background: #f0ebe0;
-    aspect-ratio: 1;
-  }
-  .gallery-item img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    display: block;
-  }
-  .gallery-actions {
-    position: absolute;
-    inset: 0;
-    background: rgba(0,0,0,0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0;
-    transition: opacity 0.2s ease;
-  }
-  .gallery-item:hover .gallery-actions {
-    opacity: 1;
-  }
-  .gallery-actions button {
-    background: rgba(255,255,255,0.9) !important;
-    color: #6b2d2d !important;
-    font-size: 12px;
-    padding: 8px 12px !important;
-  }
-  .repeater-card.nested {
-    background: #f9f3ec;
-    margin-left: 12px;
-    margin-right: 0;
-  }
-  .repeater-card h3, .repeater-card h4 {
-    margin: 0 0 12px;
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 24px;
-  }
-  .repeater-card h4 {
-    font-size: 16px;
   }
   @media (max-width: 900px) {
     .admin-shell { grid-template-columns: 1fr; }
