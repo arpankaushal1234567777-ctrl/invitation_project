@@ -1076,6 +1076,22 @@ function App() {
                         <figcaption>{photo.caption}</figcaption>
                       </RevealOnScroll>
                     ))}
+                    {data.story.gallery.map((image, index) => (
+                      <RevealOnScroll
+                        key={`gallery-${image.storagePath}`}
+                        as="figure"
+                        className="polaroid-card"
+                        delay={(data.story.photos.length + index) * 120}
+                      >
+                        <div
+                          className="tilt-frame"
+                          style={{ "--polaroid-tilt": `${(data.story.photos.length + index) % 2 === 0 ? -2 : 2}deg` }}
+                        >
+                          <img src={image.imageUrl} alt="Gallery" />
+                        </div>
+                        <figcaption>Our Story</figcaption>
+                      </RevealOnScroll>
+                    ))}
                   </div>
                 </RevealOnScroll>
 
@@ -1085,6 +1101,15 @@ function App() {
                   <h2 className="section-title">{data.uiText.venueTitle}</h2>
                   <div className="venue-card">
                     <img src={data.venue.imageUrl} alt={data.venue.name} className="venue-image" />
+                    {data.venue.gallery.length > 0 && (
+                      <div className="gallery-preview" style={{ marginBottom: "16px" }}>
+                        {data.venue.gallery.map((image) => (
+                          <div key={image.storagePath} className="gallery-item">
+                            <img src={image.imageUrl} alt="Venue" />
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     <div className="venue-separator">✦</div>
                     <h3>{data.venue.name}</h3>
                     <p>{data.venue.address}</p>
@@ -1109,6 +1134,15 @@ function App() {
                         {event.imageUrl ? (
                           <img src={event.imageUrl} alt={event.name} className="event-image" />
                         ) : null}
+                        {event.gallery && event.gallery.length > 0 && (
+                          <div className="gallery-preview" style={{ marginBottom: "14px" }}>
+                            {event.gallery.map((image) => (
+                              <div key={image.storagePath} className="gallery-item">
+                                <img src={image.imageUrl} alt="Event" />
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         <h3>{event.name}</h3>
                         <p className="event-meta">
                           {event.date} <span>·</span> {event.time}
