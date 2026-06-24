@@ -242,23 +242,22 @@ async function uploadImageToSupabase(file, galleryType, eventId = null) {
 }
 
 async function persistGalleryImageRow({ galleryType, eventId, imageUrl, storagePath }) {
-  if (!isSupabaseConfigured || !supabase) {
-    throw new Error("Supabase not configured");
-  }
+  const { data, error } = await supabase
+    .from("gallery_images")
+    .insert([
+      {
+        gallery_type: galleryType,
+        event_id: eventId,
+        image_url: imageUrl,
+        storage_path: storagePath,
+      },
+    ])
+    .select();
 
-  const { error } = await supabase.from("gallery_images").insert([
-    {
-      gallery_type: galleryType,
-      event_id: eventId,
-      image_url: imageUrl,
-      storage_path: storagePath,
-      created_at: new Date().toISOString(),
-    },
-  ]);
+  console.log("DATA:", data);
+  console.log("ERROR:", error);
 
-  if (error) {
-    throw error;
-  }
+  if (error) throw error;
 }
 
 async function deleteGalleryImageRow(storagePath) {
