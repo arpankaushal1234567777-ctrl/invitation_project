@@ -449,9 +449,18 @@ function App() {
 
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) {
+      setDbLoading(false);
       return undefined;
     }
     let cancelled = false;
+
+    // Safety timeout — never stay stuck longer than 5 seconds
+    const safetyTimer = window.setTimeout(() => {
+      if (!cancelled) {
+        cancelled = true;
+        setDbLoading(false);
+      }
+    }, 5000);
 
     async function loadAllFromSupabase() {
       try {
@@ -504,13 +513,17 @@ function App() {
       } catch (err) {
         console.error("Failed to load from Supabase", err);
       } finally {
-        if (!cancelled) setDbLoading(false);
+        if (!cancelled) {
+          window.clearTimeout(safetyTimer);
+          setDbLoading(false);
+        }
       }
     }
 
     loadAllFromSupabase();
     return () => {
       cancelled = true;
+      window.clearTimeout(safetyTimer);
     };
   }, []);
 
