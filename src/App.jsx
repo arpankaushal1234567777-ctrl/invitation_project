@@ -257,14 +257,17 @@ async function deleteImageFromSupabase(storagePath) {
   }
 }
 
-function ImageUploader({ galleryType, eventId, onUpload, onError, maxImages = MAX_IMAGES_PER_GALLERY, currentCount = 0 }) {
+function ImageUploader({ galleryType, eventId, onUpload, onError, maxImages = MAX_IMAGES_PER_GALLERY, currentCount = 0, multiple = true, buttonLabel = "Choose Images" }) {
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [preview, setPreview] = useState(null);
   const fileInputRef = useRef(null);
 
   const handleFiles = async (files) => {
-    const validFiles = Array.from(files).filter(f => {
+    const selectedFiles = Array.from(files);
+    const uploadFiles = multiple ? selectedFiles : selectedFiles.slice(0, 1);
+
+    const validFiles = uploadFiles.filter((f) => {
       if (!isValidImage(f)) {
         onError(`${f.name} is not a valid image format`);
         return false;
@@ -283,13 +286,17 @@ function ImageUploader({ galleryType, eventId, onUpload, onError, maxImages = MA
 
     setUploading(true);
     try {
-      for (const file of validFiles) {
+      for (let fileIndex = 0; fileIndex < validFiles.length; fileIndex += 1) {
+        const file = validFiles[fileIndex];
         const result = await uploadImageToSupabase(file, galleryType, eventId);
-        onUpload({
-          imageUrl: result.imageUrl,
-          storagePath: result.storagePath,
-          caption: file.name.replace(/\.[^/.]+$/, ""),
-        });
+        onUpload(
+          {
+            imageUrl: result.imageUrl,
+            storagePath: result.storagePath,
+            caption: file.name.replace(/\.[^/.]+$/, ""),
+          },
+          fileIndex
+        );
       }
       setPreview(null);
       if (fileInputRef.current) {
@@ -326,7 +333,7 @@ function ImageUploader({ galleryType, eventId, onUpload, onError, maxImages = MA
       <input
         ref={fileInputRef}
         type="file"
-        multiple
+        multiple={multiple}
         accept={VALID_IMAGE_EXTENSIONS.join(",")}
         onChange={handleFileSelect}
         disabled={uploading || currentCount >= maxImages}
@@ -338,9 +345,9 @@ function ImageUploader({ galleryType, eventId, onUpload, onError, maxImages = MA
         onClick={() => fileInputRef.current?.click()}
         disabled={uploading || currentCount >= maxImages}
       >
-        {uploading ? "Uploading..." : "Choose Images"}
+        {uploading ? "Uploading..." : buttonLabel}
       </button>
-      <small>{currentCount}/{maxImages} images</small>
+      {multiple ? <small>{currentCount}/{maxImages} images</small> : null}
       {preview && (
         <div className="image-preview-modal">
           <img src={preview} alt="Preview" />
@@ -1189,6 +1196,18 @@ function App() {
                   {data.story.photos.map((photo, index) => (
                     <div key={index} className="repeater-card nested">
                       <Field label="Photo URL" value={photo.url} onChange={(value) => updateNestedValue(setData, ["story", "photos", index, "url"], value)} />
+                      <ImageUploader
+                        multiple={false}
+                        buttonLabel="Upload Photo"
+                        galleryType="story"
+                        onUpload={(image) =>
+                          updateNestedValue(setData, ["story", "photos", index, "url"], image.imageUrl)
+                        }
+                        onError={(msg) => {
+                          setSaveError(msg);
+                          window.setTimeout(() => setSaveError(""), 2200);
+                        }}
+                      />
                       <Field label="Caption" value={photo.caption} onChange={(value) => updateNestedValue(setData, ["story", "photos", index, "caption"], value)} />
                       <button
                         className="ghost-button"
@@ -1223,50 +1242,6 @@ function App() {
                     </button>
                   )}
                 </div>
-                <div className="repeater-card">
-                  <h4>Uploaded Gallery ({data.story.gallery?.length || 0}/{MAX_IMAGES_PER_GALLERY})</h4>
-                  <ImageUploader
-                    galleryType="story"
-                    onUpload={(image) =>
-                      setData((current) => ({
-                        ...current,
-                        story: {
-                          ...current.story,
-                          gallery: [...(current.story.gallery || []), image],
-                        },
-                      }))
-                    }
-                    onError={(msg) => {
-                      setSaveError(msg);
-                      window.setTimeout(() => setSaveError(""), 2200);
-                    }}
-                    maxImages={MAX_IMAGES_PER_GALLERY}
-                    currentCount={data.story.gallery?.length || 0}
-                  />
-                  <div className="gallery-preview">
-                    {data.story.gallery?.map((img, idx) => (
-                      <div key={idx} className="gallery-item">
-                        <img src={img.imageUrl} alt={img.caption} />
-                        <div className="gallery-actions">
-                          <button
-                            className="ghost-button small"
-                            onClick={() =>
-                              setData((current) => ({
-                                ...current,
-                                story: {
-                                  ...current.story,
-                                  gallery: current.story.gallery.filter((_, i) => i !== idx),
-                                },
-                              }))
-                            }
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
               </div>
             )}
 
@@ -1276,52 +1251,18 @@ function App() {
                 <Field label="Section Title" value={data.uiText.venueTitle} onChange={(value) => updateNestedValue(setData, ["uiText", "venueTitle"], value)} />
                 <Field label="Venue Name" value={data.venue.name} onChange={(value) => updateNestedValue(setData, ["venue", "name"], value)} />
                 <Field label="Venue Image URL" value={data.venue.imageUrl} onChange={(value) => updateNestedValue(setData, ["venue", "imageUrl"], value)} />
+                <ImageUploader
+                  multiple={false}
+                  buttonLabel="Upload Venue Image"
+                  galleryType="venue"
+                  onUpload={(image) => updateNestedValue(setData, ["venue", "imageUrl"], image.imageUrl)}
+                  onError={(msg) => {
+                    setSaveError(msg);
+                    window.setTimeout(() => setSaveError(""), 2200);
+                  }}
+                />
                 <Field label="Maps URL" value={data.venue.mapsUrl} onChange={(value) => updateNestedValue(setData, ["venue", "mapsUrl"], value)} />
                 <TextArea label="Address" value={data.venue.address} onChange={(value) => updateNestedValue(setData, ["venue", "address"], value)} />
-                <div className="field full">
-                  <span>Venue Gallery ({data.venue.gallery?.length || 0}/{MAX_IMAGES_PER_GALLERY})</span>
-                  <ImageUploader
-                    galleryType="venue"
-                    onUpload={(image) =>
-                      setData((current) => ({
-                        ...current,
-                        venue: {
-                          ...current.venue,
-                          gallery: [...(current.venue.gallery || []), image],
-                        },
-                      }))
-                    }
-                    onError={(msg) => {
-                      setSaveError(msg);
-                      window.setTimeout(() => setSaveError(""), 2200);
-                    }}
-                    maxImages={MAX_IMAGES_PER_GALLERY}
-                    currentCount={data.venue.gallery?.length || 0}
-                  />
-                  <div className="gallery-preview">
-                    {data.venue.gallery?.map((img, idx) => (
-                      <div key={idx} className="gallery-item">
-                        <img src={img.imageUrl} alt={`venue-${idx}`} />
-                        <div className="gallery-actions">
-                          <button
-                            className="ghost-button small"
-                            onClick={() =>
-                              setData((current) => ({
-                                ...current,
-                                venue: {
-                                  ...current.venue,
-                                  gallery: current.venue.gallery.filter((_, i) => i !== idx),
-                                },
-                              }))
-                            }
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
               </div>
             )}
 
@@ -1338,8 +1279,18 @@ function App() {
                     <Field label="Date Label" value={event.date} onChange={(value) => updateNestedValue(setData, ["festivities", index, "date"], value)} />
                     <Field label="Time" value={event.time} onChange={(value) => updateNestedValue(setData, ["festivities", index, "time"], value)} />
                     <Field label="Event Image URL" value={event.imageUrl || ""} onChange={(value) => updateNestedValue(setData, ["festivities", index, "imageUrl"], value)} />
+                    <ImageUploader
+                      multiple={false}
+                      buttonLabel="Upload Event Image"
+                      galleryType="festivity"
+                      eventId={event.id}
+                      onUpload={(image) => updateNestedValue(setData, ["festivities", index, "imageUrl"], image.imageUrl)}
+                      onError={(msg) => {
+                        setSaveError(msg);
+                        window.setTimeout(() => setSaveError(""), 2200);
+                      }}
+                    />
                     <TextArea label="Quote" value={event.quote} onChange={(value) => updateNestedValue(setData, ["festivities", index, "quote"], value)} />
-                    <Field label="Dress Code Names" value={event.dressCode.names} onChange={(value) => updateNestedValue(setData, ["festivities", index, "dressCode", "names"], value)} />
                     <Field label="Dress Code Style" value={event.dressCode.style} onChange={(value) => updateNestedValue(setData, ["festivities", index, "dressCode", "style"], value)} />
                     <Field label="Venue" value={event.venue} onChange={(value) => updateNestedValue(setData, ["festivities", index, "venue"], value)} />
                     <Field label="Maps URL" value={event.mapsUrl} onChange={(value) => updateNestedValue(setData, ["festivities", index, "mapsUrl"], value)} />
@@ -1360,53 +1311,6 @@ function App() {
                           />
                         </label>
                       ))}
-                    </div>
-                    <div className="field full">
-                      <span>Event Gallery ({event.gallery?.length || 0}/{MAX_IMAGES_PER_GALLERY})</span>
-                      <ImageUploader
-                        galleryType="festivity"
-                        eventId={event.id}
-                        onUpload={(image) =>
-                          setData((current) => ({
-                            ...current,
-                            festivities: current.festivities.map((e, i) =>
-                              i === index
-                                ? { ...e, gallery: [...(e.gallery || []), image] }
-                                : e
-                            ),
-                          }))
-                        }
-                        onError={(msg) => {
-                          setSaveError(msg);
-                          window.setTimeout(() => setSaveError(""), 2200);
-                        }}
-                        maxImages={MAX_IMAGES_PER_GALLERY}
-                        currentCount={event.gallery?.length || 0}
-                      />
-                      <div className="gallery-preview">
-                        {event.gallery?.map((img, idx) => (
-                          <div key={idx} className="gallery-item">
-                            <img src={img.imageUrl} alt={`event-${index}-${idx}`} />
-                            <div className="gallery-actions">
-                              <button
-                                className="ghost-button small"
-                                onClick={() =>
-                                  setData((current) => ({
-                                    ...current,
-                                    festivities: current.festivities.map((e, i) =>
-                                      i === index
-                                        ? { ...e, gallery: e.gallery.filter((_, iidx) => iidx !== idx) }
-                                        : e
-                                    ),
-                                  }))
-                                }
-                              >
-                                Delete
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
                     </div>
                     <button
                       className="ghost-button"
