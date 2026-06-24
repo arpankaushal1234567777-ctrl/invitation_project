@@ -241,6 +241,41 @@ async function uploadImageToSupabase(file, galleryType, eventId = null) {
   }
 }
 
+async function persistGalleryImageRow({ galleryType, eventId, imageUrl, storagePath }) {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error("Supabase not configured");
+  }
+
+  const { error } = await supabase.from("gallery_images").insert([
+    {
+      gallery_type: galleryType,
+      event_id: eventId,
+      image_url: imageUrl,
+      storage_path: storagePath,
+      created_at: new Date().toISOString(),
+    },
+  ]);
+
+  if (error) {
+    throw error;
+  }
+}
+
+async function deleteGalleryImageRow(storagePath) {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error("Supabase not configured");
+  }
+
+  const { error } = await supabase
+    .from("gallery_images")
+    .delete()
+    .eq("storage_path", storagePath);
+
+  if (error) {
+    throw error;
+  }
+}
+
 async function deleteImageFromSupabase(storagePath) {
   if (!isSupabaseConfigured || !supabase) {
     throw new Error("Supabase not configured");
@@ -252,6 +287,8 @@ async function deleteImageFromSupabase(storagePath) {
       .remove([storagePath]);
 
     if (error) throw error;
+
+    await deleteGalleryImageRow(storagePath);
   } catch (error) {
     throw new Error(`Delete failed: ${error.message}`);
   }
@@ -289,6 +326,12 @@ function ImageUploader({ galleryType, eventId, onUpload, onError, maxImages = MA
       for (let fileIndex = 0; fileIndex < validFiles.length; fileIndex += 1) {
         const file = validFiles[fileIndex];
         const result = await uploadImageToSupabase(file, galleryType, eventId);
+        await persistGalleryImageRow({
+          galleryType,
+          eventId,
+          imageUrl: result.imageUrl,
+          storagePath: result.storagePath,
+        });
         onUpload(
           {
             imageUrl: result.imageUrl,
@@ -597,7 +640,39 @@ function App() {
       }));
     }
 
+    async function loadGalleryImages() {
+      const { data: rows, error } = await supabase
+        .from("gallery_images")
+        .select("gallery_type,event_id,image_url,storage_path");
+
+      if (cancelled || error || !rows) return;
+
+      setData((current) => {
+        const next = JSON.parse(JSON.stringify(current));
+        next.story.gallery = [];
+        next.venue.gallery = [];
+        next.festivities = next.festivities.map((event) => ({ ...event, gallery: [] }));
+
+        rows.forEach((row) => {
+          const image = { imageUrl: row.image_url, storagePath: row.storage_path };
+          if (row.gallery_type === "story") {
+            next.story.gallery.push(image);
+          } else if (row.gallery_type === "venue") {
+            next.venue.gallery.push(image);
+          } else if (row.gallery_type === "festivity") {
+            const eventIndex = next.festivities.findIndex((event) => String(event.id) === String(row.event_id));
+            if (eventIndex !== -1) {
+              next.festivities[eventIndex].gallery.push(image);
+            }
+          }
+        });
+
+        return next;
+      });
+    }
+
     loadSharedMusicConfig();
+    loadGalleryImages();
     return () => {
       cancelled = true;
     };
