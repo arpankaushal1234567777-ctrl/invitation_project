@@ -5,6 +5,11 @@ import {
   SUPABASE_MUSIC_BUCKET,
   SUPABASE_MUSIC_PATH,
   SUPABASE_MUSIC_ROW_ID,
+  SUPABASE_GALLERY_BUCKET,
+  VALID_IMAGE_TYPES,
+  VALID_IMAGE_EXTENSIONS,
+  MAX_IMAGE_SIZE,
+  MAX_IMAGES_PER_GALLERY,
 } from "./supabase.js";
 
 const STORAGE_KEY = "wedding-invitation-config";
@@ -44,6 +49,7 @@ const defaultData = {
       { url: "https://picsum.photos/400/500?random=2", caption: "Laughter" },
       { url: "https://picsum.photos/400/500?random=3", caption: "Forever" },
     ],
+    gallery: [],
   },
   venue: {
     name: "Rajalakshmi Kalyana Mandapam",
@@ -51,6 +57,7 @@ const defaultData = {
       "No. 205/1, Velachery Main Road, Dhandeeswaram, Velachery, Chennai, Tamil Nadu — 600042",
     imageUrl: "https://picsum.photos/400/300?random=10",
     mapsUrl: "https://maps.google.com",
+    gallery: [],
   },
   festivities: [
     {
@@ -67,6 +74,7 @@ const defaultData = {
       venue: "Accord Wildlife Pench Resort · Grand Courtyard",
       imageUrl: "https://picsum.photos/400/280?random=21",
       mapsUrl: "https://maps.google.com",
+      gallery: [],
     },
     {
       id: 2,
@@ -82,6 +90,7 @@ const defaultData = {
       venue: "Rajalakshmi Kalyana Mandapam",
       imageUrl: "https://picsum.photos/400/280?random=22",
       mapsUrl: "https://maps.google.com",
+      gallery: [],
     },
     {
       id: 3,
@@ -97,6 +106,7 @@ const defaultData = {
       venue: "Moonlight Pavilion · Lakeview Lawns",
       imageUrl: "https://picsum.photos/400/280?random=23",
       mapsUrl: "https://maps.google.com",
+      gallery: [],
     },
   ],
   music: {
@@ -183,6 +193,162 @@ function updateNestedValue(setter, path, value) {
     cursor[path[path.length - 1]] = value;
     return next;
   });
+}
+
+// Image upload utilities
+function isValidImage(file) {
+  return VALID_IMAGE_TYPES.includes(file.type);
+}
+
+function getImageExtension(file) {
+  const name = file.name.toLowerCase();
+  return VALID_IMAGE_EXTENSIONS.find(ext => name.endsWith(ext)) || ".jpg";
+}
+
+async function uploadImageToSupabase(file, galleryType, eventId = null) {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error("Supabase not configured");
+  }
+
+  if (!isValidImage(file) || file.size > MAX_IMAGE_SIZE) {
+    throw new Error("Invalid image format or size too large");
+  }
+
+  const timestamp = Date.now();
+  const eventFolder = eventId ? `events/${eventId}` : galleryType;
+  const storagePath = `${eventFolder}/${timestamp}-${Math.random().toString(36).slice(2, 9)}${getImageExtension(file)}`;
+
+  try {
+    const { error: uploadError } = await supabase.storage
+      .from(SUPABASE_GALLERY_BUCKET)
+      .upload(storagePath, file, {
+        contentType: file.type,
+        cacheControl: "0",
+      });
+
+    if (uploadError) throw uploadError;
+
+    const { data: publicUrlData } = supabase.storage
+      .from(SUPABASE_GALLERY_BUCKET)
+      .getPublicUrl(storagePath);
+
+    return {
+      imageUrl: `${publicUrlData.publicUrl}?v=${timestamp}`,
+      storagePath,
+    };
+  } catch (error) {
+    throw new Error(`Upload failed: ${error.message}`);
+  }
+}
+
+async function deleteImageFromSupabase(storagePath) {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error("Supabase not configured");
+  }
+
+  try {
+    const { error } = await supabase.storage
+      .from(SUPABASE_GALLERY_BUCKET)
+      .remove([storagePath]);
+
+    if (error) throw error;
+  } catch (error) {
+    throw new Error(`Delete failed: ${error.message}`);
+  }
+}
+
+function ImageUploader({ galleryType, eventId, onUpload, onError, maxImages = MAX_IMAGES_PER_GALLERY, currentCount = 0 }) {
+  const [dragging, setDragging] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const handleFiles = async (files) => {
+    const validFiles = Array.from(files).filter(f => {
+      if (!isValidImage(f)) {
+        onError(`${f.name} is not a valid image format`);
+        return false;
+      }
+      if (f.size > MAX_IMAGE_SIZE) {
+        onError(`${f.name} is too large (max 20MB)`);
+        return false;
+      }
+      return true;
+    });
+
+    if (currentCount + validFiles.length > maxImages) {
+      onError(`Maximum ${maxImages} images allowed`);
+      return;
+    }
+
+    setUploading(true);
+    try {
+      for (const file of validFiles) {
+        const result = await uploadImageToSupabase(file, galleryType, eventId);
+        onUpload({
+          imageUrl: result.imageUrl,
+          storagePath: result.storagePath,
+          caption: file.name.replace(/\.[^/.]+$/, ""),
+        });
+      }
+      setPreview(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    } catch (error) {
+      onError(error.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    setDragging(true);
+  };
+
+  const handleDragLeave = () => {
+    setDragging(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDragging(false);
+    handleFiles(e.dataTransfer.files);
+  };
+
+  const handleFileSelect = (e) => {
+    handleFiles(e.target.files);
+  };
+
+  return (
+    <div className={`image-uploader ${dragging ? 'dragging' : ''}`} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept={VALID_IMAGE_EXTENSIONS.join(",")}
+        onChange={handleFileSelect}
+        disabled={uploading || currentCount >= maxImages}
+        className="file-input"
+      />
+      <button
+        type="button"
+        className="pill-button dark"
+        onClick={() => fileInputRef.current?.click()}
+        disabled={uploading || currentCount >= maxImages}
+      >
+        {uploading ? "Uploading..." : "Choose Images"}
+      </button>
+      <small>{currentCount}/{maxImages} images</small>
+      {preview && (
+        <div className="image-preview-modal">
+          <img src={preview} alt="Preview" />
+          <button className="ghost-button" onClick={() => setPreview(null)}>Close</button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ScratchCard({ label, value }) {
@@ -1018,42 +1184,89 @@ function App() {
                   <Field label="Section Kicker" value={data.uiText.storyKicker} onChange={(value) => updateNestedValue(setData, ["uiText", "storyKicker"], value)} />
                   <Field label="Section Title" value={data.uiText.storyTitle} onChange={(value) => updateNestedValue(setData, ["uiText", "storyTitle"], value)} />
                 </div>
-                {data.story.photos.map((photo, index) => (
-                  <div key={index} className="repeater-card">
-                    <Field label="Photo URL" value={photo.url} onChange={(value) => updateNestedValue(setData, ["story", "photos", index, "url"], value)} />
-                    <Field label="Caption" value={photo.caption} onChange={(value) => updateNestedValue(setData, ["story", "photos", index, "caption"], value)} />
+                <div className="repeater-card">
+                  <h4>URL-Based Photos</h4>
+                  {data.story.photos.map((photo, index) => (
+                    <div key={index} className="repeater-card nested">
+                      <Field label="Photo URL" value={photo.url} onChange={(value) => updateNestedValue(setData, ["story", "photos", index, "url"], value)} />
+                      <Field label="Caption" value={photo.caption} onChange={(value) => updateNestedValue(setData, ["story", "photos", index, "caption"], value)} />
+                      <button
+                        className="ghost-button"
+                        onClick={() =>
+                          setData((current) => ({
+                            ...current,
+                            story: {
+                              ...current.story,
+                              photos: current.story.photos.filter((_, itemIndex) => itemIndex !== index),
+                            },
+                          }))
+                        }
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                  {data.story.photos.length < 5 && (
                     <button
-                      className="ghost-button"
+                      className="pill-button dark"
                       onClick={() =>
                         setData((current) => ({
                           ...current,
                           story: {
                             ...current.story,
-                            photos: current.story.photos.filter((_, itemIndex) => itemIndex !== index),
+                            photos: [...current.story.photos, { url: "https://picsum.photos/400/500", caption: "New memory" }],
                           },
                         }))
                       }
                     >
-                      Remove
+                      Add URL Photo
                     </button>
-                  </div>
-                ))}
-                {data.story.photos.length < 5 && (
-                  <button
-                    className="pill-button dark"
-                    onClick={() =>
+                  )}
+                </div>
+                <div className="repeater-card">
+                  <h4>Uploaded Gallery ({data.story.gallery?.length || 0}/{MAX_IMAGES_PER_GALLERY})</h4>
+                  <ImageUploader
+                    galleryType="story"
+                    onUpload={(image) =>
                       setData((current) => ({
                         ...current,
                         story: {
                           ...current.story,
-                          photos: [...current.story.photos, { url: "https://picsum.photos/400/500", caption: "New memory" }],
+                          gallery: [...(current.story.gallery || []), image],
                         },
                       }))
                     }
-                  >
-                    Add Photo
-                  </button>
-                )}
+                    onError={(msg) => {
+                      setSaveError(msg);
+                      window.setTimeout(() => setSaveError(""), 2200);
+                    }}
+                    maxImages={MAX_IMAGES_PER_GALLERY}
+                    currentCount={data.story.gallery?.length || 0}
+                  />
+                  <div className="gallery-preview">
+                    {data.story.gallery?.map((img, idx) => (
+                      <div key={idx} className="gallery-item">
+                        <img src={img.imageUrl} alt={img.caption} />
+                        <div className="gallery-actions">
+                          <button
+                            className="ghost-button small"
+                            onClick={() =>
+                              setData((current) => ({
+                                ...current,
+                                story: {
+                                  ...current.story,
+                                  gallery: current.story.gallery.filter((_, i) => i !== idx),
+                                },
+                              }))
+                            }
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1065,6 +1278,50 @@ function App() {
                 <Field label="Venue Image URL" value={data.venue.imageUrl} onChange={(value) => updateNestedValue(setData, ["venue", "imageUrl"], value)} />
                 <Field label="Maps URL" value={data.venue.mapsUrl} onChange={(value) => updateNestedValue(setData, ["venue", "mapsUrl"], value)} />
                 <TextArea label="Address" value={data.venue.address} onChange={(value) => updateNestedValue(setData, ["venue", "address"], value)} />
+                <div className="field full">
+                  <span>Venue Gallery ({data.venue.gallery?.length || 0}/{MAX_IMAGES_PER_GALLERY})</span>
+                  <ImageUploader
+                    galleryType="venue"
+                    onUpload={(image) =>
+                      setData((current) => ({
+                        ...current,
+                        venue: {
+                          ...current.venue,
+                          gallery: [...(current.venue.gallery || []), image],
+                        },
+                      }))
+                    }
+                    onError={(msg) => {
+                      setSaveError(msg);
+                      window.setTimeout(() => setSaveError(""), 2200);
+                    }}
+                    maxImages={MAX_IMAGES_PER_GALLERY}
+                    currentCount={data.venue.gallery?.length || 0}
+                  />
+                  <div className="gallery-preview">
+                    {data.venue.gallery?.map((img, idx) => (
+                      <div key={idx} className="gallery-item">
+                        <img src={img.imageUrl} alt={`venue-${idx}`} />
+                        <div className="gallery-actions">
+                          <button
+                            className="ghost-button small"
+                            onClick={() =>
+                              setData((current) => ({
+                                ...current,
+                                venue: {
+                                  ...current.venue,
+                                  gallery: current.venue.gallery.filter((_, i) => i !== idx),
+                                },
+                              }))
+                            }
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1076,6 +1333,7 @@ function App() {
                 </div>
                 {data.festivities.map((event, index) => (
                   <div key={event.id} className="repeater-card">
+                    <h3>{event.name}</h3>
                     <Field label="Event Name" value={event.name} onChange={(value) => updateNestedValue(setData, ["festivities", index, "name"], value)} />
                     <Field label="Date Label" value={event.date} onChange={(value) => updateNestedValue(setData, ["festivities", index, "date"], value)} />
                     <Field label="Time" value={event.time} onChange={(value) => updateNestedValue(setData, ["festivities", index, "time"], value)} />
@@ -1102,6 +1360,53 @@ function App() {
                           />
                         </label>
                       ))}
+                    </div>
+                    <div className="field full">
+                      <span>Event Gallery ({event.gallery?.length || 0}/{MAX_IMAGES_PER_GALLERY})</span>
+                      <ImageUploader
+                        galleryType="festivity"
+                        eventId={event.id}
+                        onUpload={(image) =>
+                          setData((current) => ({
+                            ...current,
+                            festivities: current.festivities.map((e, i) =>
+                              i === index
+                                ? { ...e, gallery: [...(e.gallery || []), image] }
+                                : e
+                            ),
+                          }))
+                        }
+                        onError={(msg) => {
+                          setSaveError(msg);
+                          window.setTimeout(() => setSaveError(""), 2200);
+                        }}
+                        maxImages={MAX_IMAGES_PER_GALLERY}
+                        currentCount={event.gallery?.length || 0}
+                      />
+                      <div className="gallery-preview">
+                        {event.gallery?.map((img, idx) => (
+                          <div key={idx} className="gallery-item">
+                            <img src={img.imageUrl} alt={`event-${index}-${idx}`} />
+                            <div className="gallery-actions">
+                              <button
+                                className="ghost-button small"
+                                onClick={() =>
+                                  setData((current) => ({
+                                    ...current,
+                                    festivities: current.festivities.map((e, i) =>
+                                      i === index
+                                        ? { ...e, gallery: e.gallery.filter((_, iidx) => iidx !== idx) }
+                                        : e
+                                    ),
+                                  }))
+                                }
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                     <button
                       className="ghost-button"
@@ -1137,6 +1442,7 @@ function App() {
                           venue: "Event Venue",
                           imageUrl: "https://picsum.photos/400/280?random=31",
                           mapsUrl: "https://maps.google.com",
+                          gallery: [],
                         },
                       ],
                     }))
@@ -1788,6 +2094,78 @@ const styles = `
     top: 72px;
     background: #0f766e;
     box-shadow: 0 16px 26px rgba(15,118,110,0.24);
+  }
+  .image-uploader {
+    border: 2px dashed #ead7c5;
+    border-radius: 18px;
+    padding: 16px;
+    text-align: center;
+    background: #fffaf5;
+    transition: all 0.2s ease;
+  }
+  .image-uploader.dragging {
+    border-color: #c9a84c;
+    background: #fffbf8;
+  }
+  .image-uploader .file-input {
+    display: none;
+  }
+  .image-uploader small {
+    display: block;
+    margin-top: 8px;
+    color: #8b6565;
+    font-size: 12px;
+  }
+  .gallery-preview {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 12px;
+    margin-top: 16px;
+  }
+  .gallery-item {
+    position: relative;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #f0ebe0;
+    aspect-ratio: 1;
+  }
+  .gallery-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .gallery-actions {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+  }
+  .gallery-item:hover .gallery-actions {
+    opacity: 1;
+  }
+  .gallery-actions button {
+    background: rgba(255,255,255,0.9) !important;
+    color: #6b2d2d !important;
+    font-size: 12px;
+    padding: 8px 12px !important;
+  }
+  .repeater-card.nested {
+    background: #f9f3ec;
+    margin-left: 12px;
+    margin-right: 0;
+  }
+  .repeater-card h3, .repeater-card h4 {
+    margin: 0 0 12px;
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 24px;
+  }
+  .repeater-card h4 {
+    font-size: 16px;
   }
   @media (max-width: 900px) {
     .admin-shell { grid-template-columns: 1fr; }
